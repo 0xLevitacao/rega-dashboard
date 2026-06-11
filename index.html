@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Estação de Rega</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<style>
+  :root {
+    --bg: #e7eee6;
+    --surface: #ffffff;
+    --ink: #16261c;
+    --muted: #5d6b60;
+    --green: #2f6b43;
+    --water: #2e7fb0;
+    --soil: #94704a;
+    --warn: #c0673a;
+    --line: rgba(20, 40, 28, 0.12);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.5;
+    padding: 24px 16px 48px;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+
+  header {
+    display: flex; align-items: baseline; justify-content: space-between;
+    flex-wrap: wrap; gap: 8px; margin-bottom: 28px;
+  }
+  h1 {
+    font-family: 'Fraunces', serif; font-weight: 600;
+    font-size: clamp(28px, 6vw, 42px); letter-spacing: -0.02em;
+  }
+  h1 .leaf { color: var(--green); }
+  .node { font-size: 13px; color: var(--muted); }
+
+  .status {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--muted);
+    padding: 6px 12px; background: var(--surface);
+    border-radius: 999px; border: 1px solid var(--line);
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #bbb; }
+  .dot.on { background: var(--green); box-shadow: 0 0 0 4px rgba(47,107,67,.15); }
+  .dot.err { background: var(--warn); }
+
+  .grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;
+  }
+  .card {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 16px; padding: 20px;
+  }
+  .card .label {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted); margin-bottom: 10px; display: flex; align-items: center; gap: 7px;
+  }
+  .chip { width: 8px; height: 8px; border-radius: 2px; }
+  .reading {
+    font-variant-numeric: tabular-nums;
+    font-size: 40px; font-weight: 600; line-height: 1; letter-spacing: -0.02em;
+  }
+  .reading .un { font-size: 18px; font-weight: 500; color: var(--muted); }
+  .sub { font-size: 13px; color: var(--muted); margin-top: 8px; }
+
+  .bar { height: 6px; background: var(--line); border-radius: 999px; margin-top: 14px; overflow: hidden; }
+  .bar > span { display: block; height: 100%; width: 0; border-radius: 999px; transition: width .6s ease; }
+
+  /* Tank (signature element) */
+  .tank-card { grid-column: 1 / -1; display: grid; grid-template-columns: 130px 1fr; gap: 22px; align-items: center; }
+  .tank {
+    position: relative; width: 110px; height: 150px; margin: 0 auto;
+    border: 3px solid var(--ink); border-radius: 10px; overflow: hidden;
+    background: linear-gradient(180deg, #f4f7f3, #eef2ec);
+  }
+  .water {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 0%;
+    background: linear-gradient(180deg, #5aa6d4, var(--water));
+    transition: height .8s cubic-bezier(.4,0,.2,1);
+  }
+  .water::before {
+    content: ''; position: absolute; top: -6px; left: 0; right: 0; height: 10px;
+    background: #6bb0da; border-radius: 50%;
+  }
+  .tank .mark { position: absolute; right: 6px; bottom: 33%; font-size: 10px; color: var(--warn);
+    border-top: 1px dashed var(--warn); padding-top: 1px; width: 30px; text-align: right; }
+
+  /* Pump panel */
+  .pump {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 16px; padding: 20px; margin-top: 16px;
+  }
+  .pump-status {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 18px;
+  }
+  .pump-light { width: 16px; height: 16px; border-radius: 50%; background: #ccc; flex: none; }
+  .pump-light.run { background: var(--green); animation: pulse 1.2s infinite; }
+  .pump-light.empty { background: var(--warn); }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(47,107,67,.5); } 50% { box-shadow: 0 0 0 8px rgba(47,107,67,0); } }
+  .pump-text { font-family: 'Fraunces', serif; font-size: 22px; font-weight: 600; }
+  .pump-text small { display: block; font-family: 'Inter'; font-size: 12px; font-weight: 400; color: var(--muted); }
+
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .secs { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+  .secs input {
+    width: 64px; padding: 8px; border: 1px solid var(--line); border-radius: 8px;
+    font-family: inherit; font-size: 14px; text-align: center;
+  }
+  button {
+    font-family: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+    border: none; border-radius: 10px; padding: 11px 20px; transition: opacity .15s, transform .05s;
+  }
+  button:active { transform: translateY(1px); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-run { background: var(--water); color: #fff; }
+  .btn-stop { background: transparent; color: var(--warn); border: 1px solid var(--warn); }
+
+  footer { text-align: center; font-size: 12px; color: var(--muted); margin-top: 24px; }
+
+  @media (max-width: 520px) {
+    .grid { grid-template-columns: 1fr; }
+    .tank-card { grid-template-columns: 110px 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Estação de <span class="leaf">Rega</span></h1>
+      <div class="node">dispositivo: node01</div>
+    </div>
+    <div class="status"><span class="dot" id="dot"></span><span id="statusText">A ligar…</span></div>
+  </header>
+
+  <div class="grid">
+    <div class="card">
+      <div class="label"><span class="chip" style="background:var(--soil)"></span>Humidade do solo</div>
+      <div class="reading"><span id="soilVal">--</span><span class="un">%</span></div>
+      <div class="sub" id="soilState">à espera de dados</div>
+      <div class="bar"><span id="soilBar" style="background:var(--soil)"></span></div>
+    </div>
+
+    <div class="card">
+      <div class="label"><span class="chip" style="background:var(--green)"></span>Ar</div>
+      <div class="reading"><span id="tempVal">--</span><span class="un">°C</span></div>
+      <div class="sub">humidade do ar: <span id="humVal">--</span>%</div>
+    </div>
+
+    <div class="card tank-card">
+      <div class="tank">
+        <div class="water" id="water"></div>
+        <div class="mark">mín</div>
+      </div>
+      <div>
+        <div class="label"><span class="chip" style="background:var(--water)"></span>Reservatório</div>
+        <div class="reading"><span id="levelVal">--</span><span class="un">%</span></div>
+        <div class="sub">distância à água: <span id="distVal">--</span> cm</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pump">
+    <div class="pump-status">
+      <span class="pump-light" id="pumpLight"></span>
+      <div class="pump-text" id="pumpText">Bomba: --<small id="pumpSub">à espera de dados</small></div>
+    </div>
+    <div class="controls">
+      <div class="secs">durante <input type="number" id="secs" value="10" min="1" max="60"> s</div>
+      <button class="btn-run" id="btnRun" disabled>Regar agora</button>
+      <button class="btn-stop" id="btnStop" disabled>Parar</button>
+    </div>
+  </div>
+
+  <footer>última atualização: <span id="lastUpdate">—</span></footer>
+</div>
+
+<script>
+  // ===== CONFIGURACAO (edita a password) =====
+  const HOST     = 'wss://9ccb176be40e43f9bf494c96d7918b8f.s1.eu.hivemq.cloud:8884/mqtt';
+  const USERNAME = 'dashboard';
+  const PASSWORD = 'METER_AQUI_A_PASSWORD_DASHBOARD';
+  const BASE     = 'rega/node01';
+  // ===========================================
+
+  const T = {
+    soil:  BASE + '/sensors/soil',
+    air:   BASE + '/sensors/air',
+    level: BASE + '/sensors/level',
+    state: BASE + '/actuators/pump/state',
+    cmd:   BASE + '/actuators/pump/cmd',
+  };
+
+  const $ = id => document.getElementById(id);
+  const setStatus = (txt, cls) => { $('statusText').textContent = txt; $('dot').className = 'dot ' + (cls||''); };
+  const touch = () => { $('lastUpdate').textContent = new Date().toLocaleTimeString('pt-PT'); };
+
+  const client = mqtt.connect(HOST, {
+    username: USERNAME,
+    password: PASSWORD,
+    clientId: 'dashboard-' + Math.random().toString(16).slice(2, 8),
+    clean: true,
+    reconnectPeriod: 3000,
+  });
+
+  client.on('connect', () => {
+    setStatus('Ligado', 'on');
+    client.subscribe([T.soil, T.air, T.level, T.state]);
+    $('btnRun').disabled = false;
+    $('btnStop').disabled = false;
+  });
+  client.on('reconnect', () => setStatus('A religar…', ''));
+  client.on('error', () => setStatus('Erro de ligação', 'err'));
+  client.on('close', () => { setStatus('Desligado', 'err'); $('btnRun').disabled = true; $('btnStop').disabled = true; });
+
+  client.on('message', (topic, payload) => {
+    let d = {};
+    try { d = JSON.parse(payload.toString()); } catch (e) { return; }
+    touch();
+
+    if (topic === T.soil) {
+      const v = d.valor;
+      $('soilVal').textContent = v;
+      $('soilBar').style.width = v + '%';
+      $('soilState').textContent = v < 30 ? 'solo seco' : (v > 70 ? 'bem húmido' : 'humidade média');
+    }
+    else if (topic === T.air) {
+      $('tempVal').textContent = d.temp != null ? d.temp.toFixed(1) : '--';
+      $('humVal').textContent  = d.hum  != null ? d.hum.toFixed(0) : '--';
+    }
+    else if (topic === T.level) {
+      $('levelVal').textContent = d.valor;
+      $('water').style.height = d.valor + '%';
+      $('distVal').textContent = d.dist_cm != null ? d.dist_cm.toFixed(1) : '--';
+    }
+    else if (topic === T.state) {
+      const e = d.estado;
+      const light = $('pumpLight'), text = $('pumpText'), sub = $('pumpSub');
+      if (e === 'on') {
+        light.className = 'pump-light run'; text.firstChild.textContent = 'Bomba: a regar';
+        sub.textContent = 'a água está a correr';
+      } else if (e === 'vazio') {
+        light.className = 'pump-light empty'; text.firstChild.textContent = 'Sem água';
+        sub.textContent = 'rega bloqueada — reservatório baixo';
+      } else {
+        light.className = 'pump-light'; text.firstChild.textContent = 'Bomba: parada';
+        sub.textContent = 'em repouso';
+      }
+    }
+  });
+
+  $('btnRun').addEventListener('click', () => {
+    const seg = Math.min(60, Math.max(1, parseInt($('secs').value) || 10));
+    client.publish(T.cmd, JSON.stringify({ acao: 'run', segundos: seg }));
+  });
+  $('btnStop').addEventListener('click', () => {
+    client.publish(T.cmd, JSON.stringify({ acao: 'off' }));
+  });
+</script>
+</body>
+</html>
